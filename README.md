@@ -4,7 +4,7 @@
 - machine-learning contains everything related to the reinforcement learning agents
 
 ## Common Dependencies
-'''
+```
 pip install numpy
 pip install matplotlib
-'''
+```
