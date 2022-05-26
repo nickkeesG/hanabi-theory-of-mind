@@ -38,6 +38,8 @@ import numpy as np
 import rainbow_agent
 import tensorflow as tf
 
+from rule_based_agents import AGENT_CLASSES
+
 LENIENT_SCORE = False
 
 
@@ -321,7 +323,6 @@ def parse_observations(observations, belief_0s, belief_chars, belief_ments, num_
 
   return current_player, legal_moves, observation_vector
 
-
 def run_one_episode(agent, environment, obs_stacker):
   """Runs the agent on a single game of Hanabi in self-play mode.
 
@@ -334,18 +335,27 @@ def run_one_episode(agent, environment, obs_stacker):
     step_number: int, number of actions in this episode.
     total_reward: float, undiscounted return for this episode.
   """
+    
+  partner_agent = AGENT_CLASSES[random.choice(list(AGENT_CLASSES.keys()))]
+  partner_idx = random.choice([0, 1])
+
   obs_stacker.reset_stack()
   observations = environment.reset()
   pred_vec = [None, None]
   belief_0s = [np.zeros(512) for i in range(environment.players)]
   belief_chars = [np.zeros(8) for i in range(environment.players)]
   belief_ments = [np.zeros(8) for i in range(environment.players)]
-  current_player, legal_moves, observation_vector= (
-      parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
-  action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.begin_episode(current_player, legal_moves, observation_vector)
-  belief_0s[current_player] = belief_0
-  belief_chars[current_player] = belief_char
-  belief_ments[current_player] = belief_ment
+
+  if current_player == partner_idx:
+    observation = observations['player_observations'][partner_idx]  
+    action = partner_agent.act(observation)
+  else:
+    current_player, legal_moves, observation_vector= (
+        parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
+    action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.begin_episode(current_player, legal_moves, observation_vector)
+    belief_0s[current_player] = belief_0
+    belief_chars[current_player] = belief_char
+    belief_ments[current_player] = belief_ment
 
 
   is_done = False
@@ -369,25 +379,30 @@ def run_one_episode(agent, environment, obs_stacker):
     step_number += 1
     if is_done:
       break
-    current_player, legal_moves, observation_vector = (
-        parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
-    if current_player in has_played:
-      action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.step(
-	reward_since_last_action[current_player], current_player, legal_moves, observation_vector)
-      total_pred_acc +=  pred_vec[1 - current_player][action]
-      belief_0s[current_player] = belief_0
-      belief_chars[current_player] = belief_char
-      belief_ments[current_player] = belief_ment
-    else:
-      # Each player begins the episode on their first turn (which may not be
-      # the first move of the game).
-      action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.begin_episode(current_player, 
-	legal_moves, observation_vector)
-      total_pred_acc += pred_vec[1 - current_player][action]
-      has_played.add(current_player)
-      belief_0s[current_player] = belief_0
-      belief_chars[current_player] = belief_char
-      belief_ments[current_player] = belief_ment
+  
+    if current_player == partner_idx:
+      observation = observations['player_observations'][partner_idx]  
+      action = partner_agent.act(observation)
+    else: 
+      current_player, legal_moves, observation_vector = (
+          parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
+      if current_player in has_played:
+        action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.step(
+          reward_since_last_action[current_player], current_player, legal_moves, observation_vector)
+        total_pred_acc +=  pred_vec[1 - current_player][action]
+        belief_0s[current_player] = belief_0
+        belief_chars[current_player] = belief_char
+        belief_ments[current_player] = belief_ment
+      else:
+        # Each player begins the episode on their first turn (which may not be
+        # the first move of the game).
+        action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.begin_episode(current_player, 
+          legal_moves, observation_vector)
+        total_pred_acc += pred_vec[1 - current_player][action]
+        has_played.add(current_player)
+        belief_0s[current_player] = belief_0
+        belief_chars[current_player] = belief_char
+        belief_ments[current_player] = belief_ment
 
     # Reset this player's reward accumulator.
     reward_since_last_action[current_player] = 0

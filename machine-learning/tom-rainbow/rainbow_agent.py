@@ -140,7 +140,8 @@ class RainbowAgent(dqn_agent.DQNAgent):
                epsilon_decay_period=1000,
                learning_rate=0.000025,
                optimizer_epsilon=0.00003125,
-               tf_device='/cpu:*'):
+               tf_device='/cpu:*',
+               predict_loss = False):
     """Initializes the agent and constructs its graph.
 
     Args:
@@ -279,24 +280,27 @@ class RainbowAgent(dqn_agent.DQNAgent):
         labels=target_distribution,
         logits=chosen_action_logits)
 
-    is_terminal_multiplier = tf.expand_dims(1. - tf.cast(self._replay.terminals, tf.float32), axis=1)
-    target_char = tf.stop_gradient(self._replay_next_chart * is_terminal_multiplier)
-    chosen_char = self._replay_chars * is_terminal_multiplier
-    loss2 = tf.losses.huber_loss(
-	labels=target_char,
-	predictions=chosen_char)
-
-    pactions = self._replay.pactions
-    paction_multiplier = tf.expand_dims(1. - tf.cast(tf.math.equal(pactions, -1), tf.float32), axis=1)
-    chosen_as = tf.gather_nd(self._replay_as, reshaped_actions) * paction_multiplier
-    target_as = tf.one_hot(pactions, self.num_actions) * paction_multiplier
-
-    loss3 = tf.nn.softmax_cross_entropy_with_logits(
-	labels=target_as,
-	logits=chosen_as)
-
     print("Running loss1 + loss3--------------------------------------------------------------")
-    loss = loss1 + loss2*0.01 + loss3*0.1
+    if self.predict_loss:
+        is_terminal_multiplier = tf.expand_dims(1. - tf.cast(self._replay.terminals, tf.float32), axis=1)
+        target_char = tf.stop_gradient(self._replay_next_chart * is_terminal_multiplier)
+        chosen_char = self._replay_chars * is_terminal_multiplier
+        loss2 = tf.losses.huber_loss(
+    	labels=target_char,
+    	predictions=chosen_char)
+    
+        pactions = self._replay.pactions
+        paction_multiplier = tf.expand_dims(1. - tf.cast(tf.math.equal(pactions, -1), tf.float32), axis=1)
+        chosen_as = tf.gather_nd(self._replay_as, reshaped_actions) * paction_multiplier
+        target_as = tf.one_hot(pactions, self.num_actions) * paction_multiplier
+    
+        loss3 = tf.nn.softmax_cross_entropy_with_logits(
+    	labels=target_as,
+    	logits=chosen_as)
+    
+        loss = loss1 + loss2*0.01 + loss3*0.1
+    else:
+        loss = loss1
 
     optimizer = tf.train.AdamOptimizer(
         learning_rate=self.learning_rate,

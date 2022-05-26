@@ -42,5 +42,5 @@ rainbow_template.layer_size = 512
 rainbow_template.num_layers=2
 
 # Theory of Mind
-RainbowAgent.predict_loss = False
+RainbowAgent.predict_loss = True
 

@@ -1,4 +1,4 @@
-##Authorship
+## Authorship
 The code in this folder is all in some way derived from the code found on DeepMind's github repository "Hanabi Learning Environment". This was done to ensure proper interfacing with the Hanabi Learning Environment, which is how the game is simulated.
 
 ## Dependencies
