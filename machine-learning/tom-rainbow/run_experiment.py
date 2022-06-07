@@ -337,81 +337,84 @@ def run_one_episode(agent, environment, obs_stacker):
   """
     
   partner_agent = AGENT_CLASSES[random.choice(list(AGENT_CLASSES.keys()))]
+  print(partner_agent)
   partner_idx = random.choice([0, 1])
-
-  obs_stacker.reset_stack()
-  observations = environment.reset()
-  pred_vec = [None, None]
-  belief_0s = [np.zeros(512) for i in range(environment.players)]
   belief_chars = [np.zeros(8) for i in range(environment.players)]
-  belief_ments = [np.zeros(8) for i in range(environment.players)]
 
-  if current_player == partner_idx:
-    observation = observations['player_observations'][partner_idx]  
-    action = partner_agent.act(observation)
-  else:
-    current_player, legal_moves, observation_vector= (
-        parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
-    action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.begin_episode(current_player, legal_moves, observation_vector)
-    belief_0s[current_player] = belief_0
-    belief_chars[current_player] = belief_char
-    belief_ments[current_player] = belief_ment
-
-
-  is_done = False
   total_reward = 0
   step_number = 0
   total_pred_acc = 0
 
-  has_played = {current_player}
+  for i in range(10):
+    obs_stacker.reset_stack()
+    observations = environment.reset()
+    pred_vec = [None, None]
+    belief_0s = [np.zeros(512) for i in range(environment.players)]
+    belief_ments = [np.zeros(8) for i in range(environment.players)]
 
-  # Keep track of per-player reward.
-  reward_since_last_action = np.zeros(environment.players)
-
-  while not is_done:
-    observations, reward, is_done, _ = environment.step(action.item())
-
-    modified_reward = max(reward, 0) if LENIENT_SCORE else reward
-    total_reward += modified_reward
-
-    reward_since_last_action += modified_reward
-
-    step_number += 1
-    if is_done:
-      break
-  
     if current_player == partner_idx:
       observation = observations['player_observations'][partner_idx]  
       action = partner_agent.act(observation)
-    else: 
-      current_player, legal_moves, observation_vector = (
+    else:
+      current_player, legal_moves, observation_vector= (
           parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
-      if current_player in has_played:
-        action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.step(
-          reward_since_last_action[current_player], current_player, legal_moves, observation_vector)
-        total_pred_acc +=  pred_vec[1 - current_player][action]
-        belief_0s[current_player] = belief_0
-        belief_chars[current_player] = belief_char
-        belief_ments[current_player] = belief_ment
-      else:
-        # Each player begins the episode on their first turn (which may not be
-        # the first move of the game).
-        action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.begin_episode(current_player, 
-          legal_moves, observation_vector)
-        total_pred_acc += pred_vec[1 - current_player][action]
-        has_played.add(current_player)
-        belief_0s[current_player] = belief_0
-        belief_chars[current_player] = belief_char
-        belief_ments[current_player] = belief_ment
+      action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.begin_episode(current_player, legal_moves, observation_vector)
+      belief_0s[current_player] = belief_0
+      belief_chars[current_player] = belief_char
+      belief_ments[current_player] = belief_ment
 
-    # Reset this player's reward accumulator.
-    reward_since_last_action[current_player] = 0
+    is_done = False
 
+    has_played = {current_player}
+
+    # Keep track of per-player reward.
+    reward_since_last_action = np.zeros(environment.players)
+
+    while not is_done:
+      observations, reward, is_done, _ = environment.step(action.item())
+
+      modified_reward = max(reward, 0) if LENIENT_SCORE else reward
+      total_reward += modified_reward
+
+      reward_since_last_action += modified_reward
+
+      step_number += 1
+      if is_done:
+        break
+    
+      if current_player == partner_idx:
+        observation = observations['player_observations'][partner_idx]  
+        action = partner_agent.act(observation)
+      else: 
+        current_player, legal_moves, observation_vector = (
+            parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
+        if current_player in has_played:
+          action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.step(
+            reward_since_last_action[current_player], current_player, legal_moves, observation_vector)
+          total_pred_acc +=  pred_vec[1 - current_player][action]
+          belief_0s[current_player] = belief_0
+          belief_chars[current_player] = belief_char
+          belief_ments[current_player] = belief_ment
+        else:
+          # Each player begins the episode on their first turn (which may not be
+          # the first move of the game).
+          action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.begin_episode(current_player, 
+            legal_moves, observation_vector)
+          total_pred_acc += pred_vec[1 - current_player][action]
+          has_played.add(current_player)
+          belief_0s[current_player] = belief_0
+          belief_chars[current_player] = belief_char
+          belief_ments[current_player] = belief_ment
+
+      # Reset this player's reward accumulator.
+      reward_since_last_action[current_player] = 0
+
+
+  #Fully end the episode (not just reset)
   agent.end_episode(reward_since_last_action)
 
   #tf.logging.info('EPISODE: %d %g', step_number, total_reward)
   return step_number, total_reward, (total_pred_acc / step_number)
-
 
 def run_one_phase(agent, environment, obs_stacker, min_steps, statistics,
                   run_mode_str):

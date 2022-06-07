@@ -41,7 +41,8 @@ def rainbow_template(state,
                      num_atoms=51,
                      layer_size=512,
 		     char_size=8,
-                     num_layers=1):
+                     num_layers=1,
+                     ToM = False):
   r"""Builds a Rainbow Network mapping states to value distributions.
 
   Args:
@@ -68,56 +69,45 @@ def rainbow_template(state,
   char_vec = full_vec[:,-2 * char_size :-1 * char_size]
   ment_vec = full_vec[:,-1*char_size:]
 
-  #Layer Normalization
-  char_vec_norm = tf.math.add(char_vec, (-1*tf.math.reduce_mean(char_vec)))
-  ment_vec_norm = tf.math.add(ment_vec, (-1*tf.math.reduce_mean(ment_vec)))
-
-  char_vec_norm /= tf.math.reduce_variance(char_vec_norm)
-  ment_vec_norm /= tf.math.reduce_variance(ment_vec_norm)
-
-  #char_vec = tf.fill(tf.shape(char_vec), 0.0)
-  #ment_vec = tf.fill(tf.shape(ment_vec), 0.0)
-
-  input_zero = tf.concat([obs_vec, zero_vec, char_vec_norm, ment_vec_norm])
+  if ToM:
+        char_vec_norm = normalize_layer(char_vec)
+        ment_vec_norm = normalize_layer(ment_vec)
+        input_zero = tf.concat([obs_vec, zero_vec, char_vec_norm, ment_vec_norm], -1)
+  else:
+        char_vec = tf.fill(tf.shape(char_vec), 0.0)
+        ment_vec = tf.fill(tf.shape(ment_vec), 0.0)
+        input_zero = tf.concat([obs_vec, zero_vec], -1)
 
   belief_0 = slim.fully_connected(input_zero, layer_size, activation_fn = tf.nn.relu, weights_regularizer = weights_regularizer)
-  belief_0 = slim.fully_connected(belief_0, layer_size, activation_fn = tf.nn.relu, weights_regularizer = weights_regularizer)
-
   belief_0_stopped = tf.stop_gradient(belief_0)
 
-  input_char = tf.concat([obs_vec, belief_0_stopped, char_vec, ment_vec], -1)
-  belief_char = slim.fully_connected(input_char, char_size*2, activation_fn = tf.nn.relu, weights_regularizer = weights_regularizer)
-  belief_char = slim.fully_connected(belief_char, char_size, activation_fn = tf.nn.relu, weights_regularizer = weights_regularizer)
+  if ToM:
+        input_char = tf.concat([obs_vec, belief_0_stopped, char_vec, ment_vec], -1)
+        belief_char = slim.fully_connected(input_char, char_size, activation_fn = tf.nn.relu, weights_regularizer = weights_regularizer)
 
-  input_ment = tf.concat([obs_vec, belief_0_stopped, belief_char, ment_vec], -1)
-  belief_ment = slim.fully_connected(input_ment, char_size*2, activation_fn = tf.nn.relu, weights_regularizer = weights_regularizer)
-  belief_ment = slim.fully_connected(belief_ment, char_size, activation_fn = tf.nn.relu, weights_regularizer = weights_regularizer)
+        input_ment = tf.concat([obs_vec, belief_0_stopped, belief_char, ment_vec], -1)
+        belief_ment = slim.fully_connected(input_ment, char_size, activation_fn = tf.nn.relu, weights_regularizer = weights_regularizer)
 
-  belief_char_stopped = tf.stop_gradient(belief_char)
-  belief_ment_stopped = tf.stop_gradient(belief_ment)
+        belief_char_stopped = tf.stop_gradient(belief_char)
+        belief_ment_stopped = tf.stop_gradient(belief_ment)
+        belief_char_stopped = normalize_layer(belief_char_stopped)
+        belief_ment_stopped = normalize_layer(belief_ment_stopped)
+        input_q = tf.concat([belief_0, belief_char_stopped, belief_ment_stopped], -1)
+  else:
+        belief_char = tf.fill(tf.shape(char_vec), 0.0) #dummy input
+        belief_ment = tf.fill(tf.shape(ment_vec), 0.0) #dummy input
+        input_q = belief_0
 
-  #Layer Normalization
-  belief_char_stopped = tf.math.add(belief_char_stopped, (-1*tf.math.reduce_mean(belief_char_stopped)))
-  belief_ment_stopped = tf.math.add(belief_ment_stopped, (-1*tf.math.reduce_mean(belief_ment_stopped)))
-
-  belief_char_stopped /= tf.math.reduce_variance(belief_char_stopped)
-  belief_ment_stopped /= tf.math.reduce_variance(belief_ment_stopped)
-
-  #input_q = belief_0
-  input_q = tf.concat([belief_0, belief_char_stopped, belief_ment_stopped], -1)
-  q_out = slim.fully_connected(input_q, layer_size, activation_fn = tf.nn.relu, weights_regularizer = weights_regularizer)
-  q_out = slim.fully_connected(q_out, num_actions * num_atoms, activation_fn=None,
-				weights_initializer=weights_initializer, weights_regularizer = weights_regularizer)
+  q_out = slim.fully_connected(input_q, num_actions * num_atoms, activation_fn=None,
+                                weights_initializer=weights_initializer, weights_regularizer = weights_regularizer)
   q_out = tf.reshape(q_out, [-1, num_actions, num_atoms])
-	
-  input_a = tf.concat([belief_char, belief_ment], -1)
-  a_out = slim.fully_connected(input_a, layer_size, activation_fn = tf.nn.relu, weights_regularizer = weights_regularizer)
-  a_out = slim.fully_connected(a_out, num_actions * num_actions, activation_fn=None,
-				weights_initializer=weights_initializer, weights_regularizer = weights_regularizer)
-  a_out = tf.reshape(a_out, [-1, num_actions, num_actions])
-  
-  return q_out, belief_0, belief_char, belief_ment, a_out
 
+  input_a = tf.concat([belief_char, belief_ment], -1)
+  a_out = slim.fully_connected(input_a, num_actions * num_actions, activation_fn=None,
+                                weights_initializer=weights_initializer, weights_regularizer = weights_regularizer)
+  a_out = tf.reshape(a_out, [-1, num_actions, num_actions])
+
+  return q_out, belief_0, belief_char, belief_ment, a_out
 
 @gin.configurable
 class RainbowAgent(dqn_agent.DQNAgent):
@@ -172,7 +162,7 @@ class RainbowAgent(dqn_agent.DQNAgent):
     self.learning_rate = learning_rate
     self.optimizer_epsilon = optimizer_epsilon
 
-    graph_template = functools.partial(rainbow_template, num_atoms=num_atoms)
+    graph_template = functools.partial(rainbow_template, num_atoms=num_atoms, ToM = self.predict_loss)
     super(RainbowAgent, self).__init__(
         num_actions=num_actions,
         observation_size=observation_size,
@@ -280,7 +270,6 @@ class RainbowAgent(dqn_agent.DQNAgent):
         labels=target_distribution,
         logits=chosen_action_logits)
 
-    print("Running loss1 + loss3--------------------------------------------------------------")
     if self.predict_loss:
         is_terminal_multiplier = tf.expand_dims(1. - tf.cast(self._replay.terminals, tf.float32), axis=1)
         target_char = tf.stop_gradient(self._replay_next_chart * is_terminal_multiplier)
@@ -298,7 +287,7 @@ class RainbowAgent(dqn_agent.DQNAgent):
     	labels=target_as,
     	logits=chosen_as)
     
-        loss = loss1 + loss2*0.01 + loss3*0.1
+        loss = loss1 + loss2*0.01 + loss3
     else:
         loss = loss1
 
