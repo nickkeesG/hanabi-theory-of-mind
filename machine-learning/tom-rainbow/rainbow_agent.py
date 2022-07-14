@@ -35,12 +35,18 @@ import tensorflow as tf
 
 slim = tf.contrib.slim
 
+def normalize_layer(layer):
+  layer = tf.add(layer, (-1*tf.math.reduce_mean(layer)))
+  variance = tf.add(tf.math.reduce_variance(layer), 0.000001)
+  layer /= tf.sqrt(variance)
+  return layer
+
 @gin.configurable
 def rainbow_template(state,
                      num_actions,
                      num_atoms=51,
                      layer_size=512,
-		     char_size=8,
+                     char_size=8,
                      num_layers=1,
                      ToM = False):
   r"""Builds a Rainbow Network mapping states to value distributions.
@@ -59,13 +65,13 @@ def rainbow_template(state,
   """
   weights_initializer = slim.variance_scaling_initializer(
       factor=1.0 / np.sqrt(3.0), mode='FAN_IN', uniform=True)
-  weights_regularizer=slim.l2_regularizer(0.000001)
+  weights_regularizer=slim.l2_regularizer(0.001)
   
   full_vec = tf.cast(state, tf.float32)
   full_vec = tf.squeeze(full_vec, axis=2)
 
   obs_vec = full_vec[:,:-1 * (layer_size + 2*char_size)]
-  zero_vec = ful_vec[:,-1 * (layer_size + 2*char_size): -2 * char_size]
+  zero_vec = full_vec[:,-1 * (layer_size + 2*char_size): -2 * char_size]
   char_vec = full_vec[:,-2 * char_size :-1 * char_size]
   ment_vec = full_vec[:,-1*char_size:]
 
@@ -93,7 +99,7 @@ def rainbow_template(state,
         belief_char_stopped = normalize_layer(belief_char_stopped)
         belief_ment_stopped = normalize_layer(belief_ment_stopped)
         input_q = tf.concat([belief_0, belief_char_stopped, belief_ment_stopped], -1)
-  else:
+  else:  
         belief_char = tf.fill(tf.shape(char_vec), 0.0) #dummy input
         belief_ment = tf.fill(tf.shape(ment_vec), 0.0) #dummy input
         input_q = belief_0
@@ -101,13 +107,14 @@ def rainbow_template(state,
   q_out = slim.fully_connected(input_q, num_actions * num_atoms, activation_fn=None,
                                 weights_initializer=weights_initializer, weights_regularizer = weights_regularizer)
   q_out = tf.reshape(q_out, [-1, num_actions, num_atoms])
-
+        
   input_a = tf.concat([belief_char, belief_ment], -1)
   a_out = slim.fully_connected(input_a, num_actions * num_actions, activation_fn=None,
                                 weights_initializer=weights_initializer, weights_regularizer = weights_regularizer)
   a_out = tf.reshape(a_out, [-1, num_actions, num_actions])
-
+  
   return q_out, belief_0, belief_char, belief_ment, a_out
+
 
 @gin.configurable
 class RainbowAgent(dqn_agent.DQNAgent):
@@ -162,7 +169,10 @@ class RainbowAgent(dqn_agent.DQNAgent):
     self.learning_rate = learning_rate
     self.optimizer_epsilon = optimizer_epsilon
 
-    graph_template = functools.partial(rainbow_template, num_atoms=num_atoms, ToM = self.predict_loss)
+    print("--------------------------------------------------------------------Using predict_loss: ", predict_loss)
+    self.predict_loss = predict_loss
+
+    graph_template = functools.partial(rainbow_template, num_atoms=num_atoms, ToM=predict_loss)
     super(RainbowAgent, self).__init__(
         num_actions=num_actions,
         observation_size=observation_size,
@@ -271,25 +281,25 @@ class RainbowAgent(dqn_agent.DQNAgent):
         logits=chosen_action_logits)
 
     if self.predict_loss:
-        is_terminal_multiplier = tf.expand_dims(1. - tf.cast(self._replay.terminals, tf.float32), axis=1)
-        target_char = tf.stop_gradient(self._replay_next_chart * is_terminal_multiplier)
-        chosen_char = self._replay_chars * is_terminal_multiplier
-        loss2 = tf.losses.huber_loss(
-    	labels=target_char,
-    	predictions=chosen_char)
-    
-        pactions = self._replay.pactions
-        paction_multiplier = tf.expand_dims(1. - tf.cast(tf.math.equal(pactions, -1), tf.float32), axis=1)
-        chosen_as = tf.gather_nd(self._replay_as, reshaped_actions) * paction_multiplier
-        target_as = tf.one_hot(pactions, self.num_actions) * paction_multiplier
-    
-        loss3 = tf.nn.softmax_cross_entropy_with_logits(
-    	labels=target_as,
-    	logits=chosen_as)
-    
-        loss = loss1 + loss2*0.01 + loss3
+      is_terminal_multiplier = tf.expand_dims(1. - tf.cast(self._replay.terminals, tf.float32), axis=1)
+      target_char = tf.stop_gradient(self._replay_next_chart * is_terminal_multiplier)
+      chosen_char = self._replay_chars * is_terminal_multiplier
+      loss2 = tf.losses.huber_loss(
+          labels=target_char,
+          predictions=chosen_char)
+
+      pactions = self._replay.pactions
+      paction_multiplier = tf.expand_dims(1. - tf.cast(tf.math.equal(pactions, -1), tf.float32), axis=1)
+      chosen_as = tf.gather_nd(self._replay_as, reshaped_actions) * paction_multiplier
+      target_as = tf.one_hot(pactions, self.num_actions) * paction_multiplier
+
+      loss3 = tf.nn.softmax_cross_entropy_with_logits(
+          labels=target_as,
+          logits=chosen_as)
+
+      loss = loss1 + loss2*0.1 + loss3
     else:
-        loss = loss1
+      loss = loss1
 
     optimizer = tf.train.AdamOptimizer(
         learning_rate=self.learning_rate,
@@ -366,12 +376,12 @@ def project_distribution(supports, weights, target_support,
         tf.Assert(
             tf.reduce_all(
                 tf.equal(tf.shape(supports)[1], tf.shape(target_support))),
-	    [supports, target_support]))
+            [supports, target_support]))
     # Assert that target_support has a single dimension.
     validate_deps.append(
         tf.Assert(
             tf.equal(tf.size(tf.shape(target_support)), 1), [target_support]))
-    # Assert that the target_support is monotonically increasing.	
+    # Assert that the target_support is monotonically increasing.       
     validate_deps.append(
         tf.Assert(tf.reduce_all(target_support_deltas > 0), [target_support]))
     # Assert that the values in target_support are equally spaced.

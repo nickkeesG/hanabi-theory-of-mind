@@ -323,7 +323,7 @@ class DQNAgent(object):
                             self.action)
     return self.action, self.belief_0, self.belief_char, self.belief_ment, self.pred_vec
 
-  def end_episode(self, final_rewards):
+  def end_episode(self, final_rewards, pactions, rl_player):
     """Signals the end of the episode to the agent.
 
     Args:
@@ -331,7 +331,7 @@ class DQNAgent(object):
         player gets their own reward, which is the sum of the rewards since
         their last move.
     """
-    self._post_transitions(terminal_rewards=final_rewards)
+    self._post_transitions(final_rewards, pactions, rl_player)
 
   def _record_transition(self, current_player, reward, observation,
                          legal_actions, action, begin=False):
@@ -356,7 +356,7 @@ class DQNAgent(object):
                    np.array(legal_actions, dtype=np.float32, copy=True),
                    action, begin))
 
-  def _post_transitions(self, terminal_rewards):
+  def _post_transitions(self, terminal_rewards, pactions, rl_player):
     """Posts this episode to the replay memory.
 
     Each player has their own episode, which is posted separately.
@@ -364,26 +364,26 @@ class DQNAgent(object):
     Args:
       terminal_rewards: `np.array`,terminal rewards for each player.
     """
-    # We store each player's episode consecutively in the replay memory.
-    num_transitions = [len(x) for x in self.transitions]
-    for player in range(self.num_players):
-      for index, transition in enumerate(self.transitions[player]):
-        # Add: o_t, l_t, a_t, r_{t+1}, term_{t+1}
-        final_transition = index == num_transitions[player] - 1
+    assert(len(self.transitions[rl_player]) > 0)
+    assert(len(self.transitions[1 - rl_player]) == 0)
+    assert(len(pactions) <= len(self.transitions[rl_player]))
+    assert(len(pactions) >= len(self.transitions[rl_player])-1)
+
+    for index, transition in enumerate(self.transitions[rl_player]):
+        final_transition = index == len(self.transitions[rl_player]) - 1
         if final_transition:
-          reward = terminal_rewards[player]
+          reward = terminal_rewards[rl_player]
         else:
-          reward = self.transitions[player][index + 1].reward
+          reward = self.transitions[rl_player][index + 1].reward
         
-        paction = -1
-        other_idx = index + player
-        if other_idx < num_transitions[1-player]:
-          paction = self.transitions[1-player][other_idx].action
+        if index < len(pactions):
+          paction = pactions[index]
+        else:
+          paction = -1  
 
         self._store_transition(transition.observation, transition.action, paction,
                                reward, final_transition,
                                transition.legal_actions)
-
 
     for player in range(self.num_players):
       self.transitions[player] = []

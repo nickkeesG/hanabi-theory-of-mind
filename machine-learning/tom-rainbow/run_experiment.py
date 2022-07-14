@@ -35,10 +35,13 @@ import dqn_agent
 import gin.tf
 from hanabi_learning_environment import rl_env
 import numpy as np
+import random
 import rainbow_agent
 import tensorflow as tf
 
 from rule_based_agents import AGENT_CLASSES
+
+import pickle
 
 LENIENT_SCORE = False
 
@@ -183,7 +186,7 @@ def create_obs_stacker(environment, history_size=4):
 
   return ObservationStacker(history_size,
                             environment.vectorized_observation_shape()[0],
-			    (belief_size, char_size, char_size),
+                            (belief_size, char_size, char_size),
                             environment.players)
 
 
@@ -323,7 +326,7 @@ def parse_observations(observations, belief_0s, belief_chars, belief_ments, num_
 
   return current_player, legal_moves, observation_vector
 
-def run_one_episode(agent, environment, obs_stacker):
+def run_one_episode(agent, environment, obs_stacker, partner_agent, N):
   """Runs the agent on a single game of Hanabi in self-play mode.
 
   Args:
@@ -336,32 +339,36 @@ def run_one_episode(agent, environment, obs_stacker):
     total_reward: float, undiscounted return for this episode.
   """
     
-  partner_agent = AGENT_CLASSES[random.choice(list(AGENT_CLASSES.keys()))]
-  print(partner_agent)
   partner_idx = random.choice([0, 1])
   belief_chars = [np.zeros(8) for i in range(environment.players)]
-
   total_reward = 0
   step_number = 0
+  total_preds = 0
   total_pred_acc = 0
 
-  for i in range(10):
+  for i in range(N):
+    pactions = []
     obs_stacker.reset_stack()
     observations = environment.reset()
     pred_vec = [None, None]
     belief_0s = [np.zeros(512) for i in range(environment.players)]
     belief_ments = [np.zeros(8) for i in range(environment.players)]
 
+    current_player, legal_moves, observation_vector= (
+          parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
     if current_player == partner_idx:
       observation = observations['player_observations'][partner_idx]  
       action = partner_agent.act(observation)
+      legal_move_dicts = observation['legal_moves']
+      legal_move_ints = observation['legal_moves_as_int']
+      idx = legal_move_dicts.index(action)
+      action = legal_move_ints[idx]
     else:
-      current_player, legal_moves, observation_vector= (
-          parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
       action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.begin_episode(current_player, legal_moves, observation_vector)
       belief_0s[current_player] = belief_0
       belief_chars[current_player] = belief_char
       belief_ments[current_player] = belief_ment
+      action = int(action)
 
     is_done = False
 
@@ -371,7 +378,7 @@ def run_one_episode(agent, environment, obs_stacker):
     reward_since_last_action = np.zeros(environment.players)
 
     while not is_done:
-      observations, reward, is_done, _ = environment.step(action.item())
+      observations, reward, is_done, _ = environment.step(action)
 
       modified_reward = max(reward, 0) if LENIENT_SCORE else reward
       total_reward += modified_reward
@@ -382,39 +389,44 @@ def run_one_episode(agent, environment, obs_stacker):
       if is_done:
         break
     
+      current_player, legal_moves, observation_vector = (
+            parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
       if current_player == partner_idx:
         observation = observations['player_observations'][partner_idx]  
         action = partner_agent.act(observation)
+        legal_move_dicts = observation['legal_moves']
+        legal_move_ints = observation['legal_moves_as_int']
+        idx = legal_move_dicts.index(action)
+        action = legal_move_ints[idx]
+        total_pred_acc += pred_vec[1 - current_player][action]
+        total_preds += 1
+        pactions.append(action)
+            
       else: 
-        current_player, legal_moves, observation_vector = (
-            parse_observations(observations, belief_0s, belief_chars, belief_ments, environment.num_moves(), obs_stacker))
         if current_player in has_played:
           action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.step(
             reward_since_last_action[current_player], current_player, legal_moves, observation_vector)
-          total_pred_acc +=  pred_vec[1 - current_player][action]
           belief_0s[current_player] = belief_0
           belief_chars[current_player] = belief_char
           belief_ments[current_player] = belief_ment
+          action = int(action)
         else:
           # Each player begins the episode on their first turn (which may not be
           # the first move of the game).
           action, belief_0, belief_char, belief_ment, pred_vec[current_player] = agent.begin_episode(current_player, 
             legal_moves, observation_vector)
-          total_pred_acc += pred_vec[1 - current_player][action]
           has_played.add(current_player)
           belief_0s[current_player] = belief_0
           belief_chars[current_player] = belief_char
           belief_ments[current_player] = belief_ment
+          action = int(action)
 
       # Reset this player's reward accumulator.
       reward_since_last_action[current_player] = 0
-
-
-  #Fully end the episode (not just reset)
-  agent.end_episode(reward_since_last_action)
+    agent.end_episode(reward_since_last_action, pactions, 1 - partner_idx)
 
   #tf.logging.info('EPISODE: %d %g', step_number, total_reward)
-  return step_number, total_reward, (total_pred_acc / step_number)
+  return step_number/N, total_reward/N, (total_pred_acc / total_preds), belief_chars[1- partner_idx]
 
 def run_one_phase(agent, environment, obs_stacker, min_steps, statistics,
                   run_mode_str):
@@ -439,12 +451,15 @@ def run_one_phase(agent, environment, obs_stacker, min_steps, statistics,
   sum_pred_acc = 0
 
   while step_count < min_steps:
-    episode_length, episode_return, pred_acc = run_one_episode(agent, environment,
-                                                     obs_stacker)
+    partner_agent_class = AGENT_CLASSES[random.choice(list(AGENT_CLASSES.keys()))]
+    partner_agent = partner_agent_class()
+
+    episode_length, episode_return, pred_acc, _ = run_one_episode(agent, environment,
+                                                     obs_stacker, partner_agent, 10)
     statistics.append({
         '{}_episode_lengths'.format(run_mode_str): episode_length,
         '{}_episode_returns'.format(run_mode_str): episode_return,
-	'{}_episode_pred_acc'.format(run_mode_str): pred_acc
+        '{}_episode_pred_acc'.format(run_mode_str): pred_acc
     })
 
     step_count += episode_length
@@ -508,7 +523,7 @@ def run_one_iteration(agent, environment, obs_stacker,
     statistics.append({
         'eval_episode_lengths': eval_episode_length,
         'eval_episode_returns': eval_episode_return,
-	'eval_episode_pred_acc': eval_episode_pred_acc
+        'eval_episode_pred_acc': eval_episode_pred_acc
     })
     tf.logging.info('Average eval. episode length: %.2f  Return: %.2f',
                     eval_episode_length, eval_episode_return)
@@ -556,6 +571,37 @@ def checkpoint_experiment(experiment_checkpointer, agent, experiment_logger,
       agent_dictionary['logs'] = experiment_logger.data
       experiment_checkpointer.save_checkpoint(iteration, agent_dictionary)
 
+def collect_character_embeddings(agent,
+                                 environment,
+                                 start_iteration,
+                                 obs_stacker,
+                                 experiment_logger,
+                                 experiment_checkpointer,
+                                 checkpoint_dir,
+                                 logging_file_prefix='log',
+                                 num_episodes=1000):
+  """Collects the character embeddings at the end of each episode"""
+  tf.logging.info('Loading iteration:', start_iteration)
+  tf.logging.info('Begin collecting character embeddings')
+  agent.eval_mode = True
+  key_list = list(AGENT_CLASSES.keys())
+  partner_list = [AGENT_CLASSES[key_list[i]]() for i in range(len(key_list))]
+  
+  data = dict()
+  for key in key_list:
+    data[key] = []
+    partner_agent = AGENT_CLASSES[key]()
+    tf.logging.info('Collecting for ', key)
+    for i in range(num_episodes):
+      episode_length, episode_return, pred_acc, char_vec = run_one_episode(agent, environment,
+                                                     		obs_stacker, partner_agent, 8)
+      data[key].append(char_vec)
+      #print(episode_length, episode_return, pred_acc, char_vec)
+
+  f = open('char_vecs3.dict', 'wb')
+  pickle.dump(data, f)
+  f.close()
+  tf.logging.info('Character embeddings saved')
 
 @gin.configurable
 def run_experiment(agent,

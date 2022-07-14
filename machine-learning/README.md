@@ -5,7 +5,7 @@ The code in this folder is all in some way derived from the code found on DeepMi
 ```
 pip install git+https://github.com/deepmind/hanabi-learning-environment.git
 pip install scikit-build
-pip install rule-based-agents
+pip install rule-based-agents/
 pip install absl-py gin-config tensorflow-gpu==1.15.0
 ```
 
