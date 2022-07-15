@@ -3,7 +3,7 @@
 - agent-based contains everything relating to the agent based theory of mind models
 - machine-learning contains everything related to the reinforcement learning agents
 
-I recommend making a python virtual environment for all dependencies.
+I recommend making a python virtual environment for all dependencies. I called mine "virtualHanabi". You should install the shared dependencies and then enter the folder of the subproject you would like to run to install any remaining dependencies. 
 
 ## Shared Dependencies
 ```
